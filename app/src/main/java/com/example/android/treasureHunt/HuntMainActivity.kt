@@ -64,7 +64,11 @@ class HuntMainActivity : AppCompatActivity() {
 private val runningQOrLater = android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q
     // A PendingIntent for the Broadcast Receiver that handles geofence transitions.
     // TODO: Step 8 add in a pending intent
-
+    private val geofencePendingIntent: PendingIntent by lazy {
+        val intent = Intent(this, GeofenceBroadcastReceiver::class.java)
+        intent.action = ACTION_GEOFENCE_EVENT
+        PendingIntent.getBroadcast(this, 0, intent, PendingIntent.FLAG_UPDATE_CURRENT)
+    }
     override fun onCreate(savedInstanceState: Bundle?) {
         Log.i(TAG, "Inside on Crate")
         super.onCreate(savedInstanceState)
@@ -74,6 +78,7 @@ private val runningQOrLater = android.os.Build.VERSION.SDK_INT >= android.os.Bui
         binding.viewmodel = viewModel
         binding.lifecycleOwner = this
         // TODO: Step 9 instantiate the geofencing client
+        geofencingClient = LocationServices.getGeofencingClient(this)
 
         // Create channel for notifications
         createChannel(this )
@@ -93,6 +98,10 @@ private val runningQOrLater = android.os.Build.VERSION.SDK_INT >= android.os.Bui
         super.onActivityResult(requestCode, resultCode, data)
         // TODO: Step 7 add code to check that the user turned on their device location and ask
         //  again if they did not
+            if (requestCode == REQUEST_TURN_DEVICE_LOCATION_ON) {
+                checkDeviceLocationSettingsAndStartGeofence(false)
+            }
+
     }
 
     /*
@@ -122,15 +131,55 @@ private val runningQOrLater = android.os.Build.VERSION.SDK_INT >= android.os.Bui
     ) {
         // TODO: Step 5 add code to handle the result of the user's permission
         Log.d(TAG, "onRequestPermissionResult")
+        Log.i(TAG,"Request Code: ${requestCode}")
+        Log.i(TAG,"A1:${grantResults[0]}")
+        Log.i(TAG, "P1:${permissions[0]}")
 
-        if (
+        if (!grantResults.isEmpty() &&
+            requestCode ==  REQUEST_FOREGROUND_ONLY_PERMISSIONS_REQUEST_CODE &&
+                permissions[0] == "android.permission.ACCESS_FINE_LOCATION") {
+
+                Log.i(TAG, "after successful foreground permission" +
+                        "calling for background permission")
+            when {
+                runningQOrLater -> {
+                    Log.i(TAG,"Running Andorid Q or later and requesting background permission")
+                    Log.i(TAG, "PackageManager Permission${PackageManager.PERMISSION_GRANTED}")
+                    Log.i(TAG, "check self permission: " +
+                            "${ActivityCompat.checkSelfPermission(
+                                this,
+                                Manifest.permission.ACCESS_FINE_LOCATION
+                            )}")
+
+                    if (PackageManager.PERMISSION_GRANTED ==
+                        ActivityCompat.checkSelfPermission(
+                            this,
+                            Manifest.permission.ACCESS_FINE_LOCATION
+                        )
+                    ) {
+                        Log.i(TAG, "Request for Background only permission")
+                        val resultCode1 = REQUEST_BACKGROUND_ONLY_PERMISSION_RESULT_CODE
+                        val permissionsArray1 = arrayOf(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+
+                        ActivityCompat.requestPermissions(
+                            this@HuntMainActivity,
+                            permissionsArray1,
+                            resultCode1
+                        )
+                    }
+                }
+                else -> Log.i(TAG, "Noting to do")
+            }
+
+        }
+        else if (
             grantResults.isEmpty() ||
             grantResults[LOCATION_PERMISSION_INDEX] == PackageManager.PERMISSION_DENIED ||
-            (requestCode == REQUEST_FOREGROUND_AND_BACKGROUND_PERMISSION_RESULT_CODE &&
-                    grantResults[BACKGROUND_LOCATION_PERMISSION_INDEX] ==
+            (requestCode ==  REQUEST_FOREGROUND_ONLY_PERMISSIONS_REQUEST_CODE &&
+                    grantResults[LOCATION_PERMISSION_INDEX] ==
                     PackageManager.PERMISSION_DENIED))
         {
-            Log.i(TAG, "Creating Snackbar")
+            Log.i(TAG, "Creating Snackbar since Foreground Permission is denied")
             Snackbar.make(
                 binding.activityMapsMain,
                 R.string.permission_denied_explanation,
@@ -143,7 +192,27 @@ private val runningQOrLater = android.os.Build.VERSION.SDK_INT >= android.os.Bui
                         flags = Intent.FLAG_ACTIVITY_NEW_TASK
                     })
                 }.show()
-        } else {
+        } else if ( grantResults.isEmpty() ||
+            grantResults[LOCATION_PERMISSION_INDEX] == PackageManager.PERMISSION_DENIED ||
+            (requestCode ==  REQUEST_BACKGROUND_ONLY_PERMISSION_RESULT_CODE &&
+                    grantResults[LOCATION_PERMISSION_INDEX] ==
+                    PackageManager.PERMISSION_DENIED)){
+
+            Log.i(TAG, "Creating Snackbar since Background Permission is denied")
+            Snackbar.make(
+                binding.activityMapsMain,
+                R.string.permission_denied_explanation,
+                Snackbar.LENGTH_INDEFINITE
+            )
+                .setAction(R.string.settings) {
+                    startActivity(Intent().apply {
+                        action = Settings.ACTION_APPLICATION_DETAILS_SETTINGS
+                        data = Uri.fromParts("package", BuildConfig.APPLICATION_ID, null)
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                    })
+                }.show()
+        }
+         else {
             Log.i(TAG, "Before Check Device Location Setting & Start Geofencing")
             checkDeviceLocationSettingsAndStartGeofence()
         }
@@ -182,6 +251,35 @@ private val runningQOrLater = android.os.Build.VERSION.SDK_INT >= android.os.Bui
      */
     private fun checkDeviceLocationSettingsAndStartGeofence(resolve:Boolean = true) {
         // TODO: Step 6 add code to check that the device's location is on
+        val locationRequest = LocationRequest.create().apply {
+            priority = LocationRequest.PRIORITY_LOW_POWER
+        }
+        val builder = LocationSettingsRequest.Builder().addLocationRequest(locationRequest)
+        val settingsClient = LocationServices.getSettingsClient(this)
+        val locationSettingsResponseTask =
+            settingsClient.checkLocationSettings(builder.build())
+        locationSettingsResponseTask.addOnFailureListener { exception ->
+            if (exception is ResolvableApiException && resolve){
+                try {
+                    exception.startResolutionForResult(this@HuntMainActivity,
+                        REQUEST_TURN_DEVICE_LOCATION_ON)
+                } catch (sendEx: IntentSender.SendIntentException) {
+                    Log.d(TAG, "Error getting location settings resolution: " + sendEx.message)
+                }
+            } else {
+                Snackbar.make(
+                    binding.activityMapsMain,
+                    R.string.location_required_error, Snackbar.LENGTH_INDEFINITE
+                ).setAction(android.R.string.ok) {
+                    checkDeviceLocationSettingsAndStartGeofence()
+                }.show()
+            }
+        }
+        locationSettingsResponseTask.addOnCompleteListener {
+            if ( it.isSuccessful ) {
+                addGeofenceForClue()
+            }
+        }
     }
 
     /*
@@ -222,8 +320,16 @@ private val runningQOrLater = android.os.Build.VERSION.SDK_INT >= android.os.Bui
         var permissionsArray = arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
         val resultCode = when {
             runningQOrLater -> {
-                permissionsArray += Manifest.permission.ACCESS_BACKGROUND_LOCATION
-                REQUEST_FOREGROUND_AND_BACKGROUND_PERMISSION_RESULT_CODE
+                Log.i(TAG, "Number of elements in Permission Array: ${permissionsArray.size}")
+                for (i in permissionsArray) {
+                    Log.i(TAG, "element ${i}")
+                }
+//                permissionsArray += Manifest.permission.ACCESS_BACKGROUND_LOCATION
+//                Log.i(TAG, "Number of elements in Permission Array: ${permissionsArray.size}")
+//                for (j in permissionsArray) {
+//                    Log.i(TAG, "element ${j}")
+//                }
+                REQUEST_FOREGROUND_ONLY_PERMISSIONS_REQUEST_CODE
             }
             else -> REQUEST_FOREGROUND_ONLY_PERMISSIONS_REQUEST_CODE
         }
@@ -233,6 +339,8 @@ private val runningQOrLater = android.os.Build.VERSION.SDK_INT >= android.os.Bui
             permissionsArray,
             resultCode
         )
+
+
     }
 
     /*
@@ -243,6 +351,51 @@ private val runningQOrLater = android.os.Build.VERSION.SDK_INT >= android.os.Bui
      */
     private fun addGeofenceForClue() {
         // TODO: Step 10 add in code to add the geofence
+        if (viewModel.geofenceIsActive()) return
+
+        val currentGeofenceIndex = viewModel.nextGeofenceIndex()
+        if(currentGeofenceIndex >= GeofencingConstants.NUM_LANDMARKS) {
+            removeGeofences()
+            viewModel.geofenceActivated()
+            return
+        }
+        val currentGeofenceData = GeofencingConstants.LANDMARK_DATA[currentGeofenceIndex]
+
+        val geofence = Geofence.Builder()
+            .setRequestId(currentGeofenceData.id)
+            .setCircularRegion(currentGeofenceData.latLong.latitude,
+                currentGeofenceData.latLong.longitude,
+                GeofencingConstants.GEOFENCE_RADIUS_IN_METERS
+            )
+            .setExpirationDuration(GeofencingConstants.GEOFENCE_EXPIRATION_IN_MILLISECONDS)
+            .setTransitionTypes(Geofence.GEOFENCE_TRANSITION_ENTER)
+            .build()
+
+        val geofencingRequest = GeofencingRequest.Builder()
+            .setInitialTrigger(GeofencingRequest.INITIAL_TRIGGER_ENTER)
+            .addGeofence(geofence)
+            .build()
+
+        geofencingClient.removeGeofences(geofencePendingIntent)?.run {
+            addOnCompleteListener {
+                geofencingClient.addGeofences(geofencingRequest, geofencePendingIntent)?.run {
+                    addOnSuccessListener {
+                        Toast.makeText(this@HuntMainActivity, R.string.geofences_added,
+                            Toast.LENGTH_SHORT)
+                            .show()
+                        Log.e("Add Geofence", geofence.requestId)
+                        viewModel.geofenceActivated()
+                    }
+                    addOnFailureListener {
+                        Toast.makeText(this@HuntMainActivity, R.string.geofences_not_added,
+                            Toast.LENGTH_SHORT).show()
+                        if ((it.message != null)) {
+                            Log.w(TAG, it.message!!)
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /**
@@ -259,6 +412,7 @@ private val runningQOrLater = android.os.Build.VERSION.SDK_INT >= android.os.Bui
 }
 
 private const val REQUEST_FOREGROUND_AND_BACKGROUND_PERMISSION_RESULT_CODE = 33
+private const val REQUEST_BACKGROUND_ONLY_PERMISSION_RESULT_CODE = 32
 private const val REQUEST_FOREGROUND_ONLY_PERMISSIONS_REQUEST_CODE = 34
 private const val REQUEST_TURN_DEVICE_LOCATION_ON = 29
 private const val TAG = "HuntMainActivity"
