@@ -20,6 +20,7 @@ import android.app.PendingIntent
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.Manifest
+import android.annotation.SuppressLint
 import android.annotation.TargetApi
 import android.content.IntentSender
 import android.net.Uri
@@ -349,6 +350,7 @@ private val runningQOrLater = android.os.Build.VERSION.SDK_INT >= android.os.Bui
      * no more geofences, we remove the geofence and let the viewmodel know that the ending hint
      * is now "active."
      */
+    @SuppressLint("MissingPermission")
     private fun addGeofenceForClue() {
         // TODO: Step 10 add in code to add the geofence
         if (viewModel.geofenceIsActive()) return
@@ -377,9 +379,12 @@ private val runningQOrLater = android.os.Build.VERSION.SDK_INT >= android.os.Bui
             .build()
 
         geofencingClient.removeGeofences(geofencePendingIntent)?.run {
+            Log.i(TAG, "inside Remove Geofences")
             addOnCompleteListener {
                 geofencingClient.addGeofences(geofencingRequest, geofencePendingIntent)?.run {
+                    Log.i(TAG, "Adding Geo Fences")
                     addOnSuccessListener {
+                        Log.i(TAG, "Success Listener")
                         Toast.makeText(this@HuntMainActivity, R.string.geofences_added,
                             Toast.LENGTH_SHORT)
                             .show()
@@ -387,6 +392,7 @@ private val runningQOrLater = android.os.Build.VERSION.SDK_INT >= android.os.Bui
                         viewModel.geofenceActivated()
                     }
                     addOnFailureListener {
+                        Log.i(TAG, "Add on Failure Listener")
                         Toast.makeText(this@HuntMainActivity, R.string.geofences_not_added,
                             Toast.LENGTH_SHORT).show()
                         if ((it.message != null)) {
@@ -404,6 +410,19 @@ private val runningQOrLater = android.os.Build.VERSION.SDK_INT >= android.os.Bui
      */
     private fun removeGeofences() {
         // TODO: Step 12 add in code to remove the geofences
+        if (!foregroundAndBackgroundLocationPermissionApproved()) {
+            return
+        }
+        geofencingClient.removeGeofences(geofencePendingIntent)?.run {
+            addOnSuccessListener {
+                Log.d(TAG, getString(R.string.geofences_removed))
+                Toast.makeText(applicationContext, R.string.geofences_removed, Toast.LENGTH_SHORT)
+                    .show()
+            }
+            addOnFailureListener {
+                Log.d(TAG, getString(R.string.geofences_not_removed))
+            }
+        }
     }
     companion object {
         internal const val ACTION_GEOFENCE_EVENT =
